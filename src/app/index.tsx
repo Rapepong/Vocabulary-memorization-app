@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Alert, Platform } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, Alert, Platform, AppState } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
@@ -12,7 +12,8 @@ import {
   checkAndShuffleDaily, 
   shuffleWord, 
   saveVocabList, 
-  getVocabList 
+  getVocabList,
+  getCurrentWord
 } from '../vocabStore';
 import { widgetTaskHandler } from '../../widget-task-handler';
 import { VocabWidget } from '../../widget/VocabWidget';
@@ -24,7 +25,25 @@ export default function HomeScreen() {
 
   useEffect(() => {
     loadInitialData();
+    
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (nextAppState === 'active') {
+        // App has come to the foreground, fetch the latest word from store
+        reloadCurrentWord();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
   }, []);
+
+  const reloadCurrentWord = async () => {
+    const word = await getCurrentWord();
+    if (word) {
+      setCurrentWord(word);
+    }
+  };
 
   const loadInitialData = async () => {
     const word = await checkAndShuffleDaily();

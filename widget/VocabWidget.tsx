@@ -56,7 +56,8 @@ export function VocabWidget({ english, thai, pos }: VocabWidgetProps) {
         text={english || 'No Word'}
         style={{
           fontSize: 22,
-          fontFamily: 'sans-serif-black',
+          fontFamily: 'sans-serif',
+          fontWeight: 'bold',
           color: '#1A252C',
           marginBottom: 4,
         }}
