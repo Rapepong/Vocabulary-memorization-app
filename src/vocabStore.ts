@@ -13,10 +13,12 @@ const LAST_SHUFFLE_DATE_KEY = '@last_shuffle_date';
 export const saveVocabList = async (list: VocabWord[]) => {
   try {
     await AsyncStorage.setItem(VOCAB_LIST_KEY, JSON.stringify(list));
-    // If it's the first time saving, shuffle a word immediately
-    const currentWord = await getCurrentWord();
-    if (!currentWord && list.length > 0) {
+    // A new list replaces the old one, so pick a word from the new list right away.
+    // Otherwise a word from the previous CSV could stay on screen until tomorrow.
+    if (list.length > 0) {
       await shuffleWord(list);
+    } else {
+      await AsyncStorage.removeItem(CURRENT_WORD_KEY);
     }
   } catch (e) {
     console.error('Failed to save vocab list', e);

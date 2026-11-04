@@ -4,19 +4,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import Papa from 'papaparse';
-import { requestWidgetUpdate } from 'react-native-android-widget';
 import * as FileSystem from 'expo-file-system/legacy';
 
-import { 
-  VocabWord, 
-  checkAndShuffleDaily, 
-  shuffleWord, 
-  saveVocabList, 
+import {
+  VocabWord,
+  checkAndShuffleDaily,
+  shuffleWord,
+  saveVocabList,
   getVocabList,
-  getCurrentWord
 } from '../vocabStore';
-import { widgetTaskHandler } from '../../widget-task-handler';
-import { VocabWidget } from '../../widget/VocabWidget';
+import { updateAllWidgets } from '../widgetUpdate';
 
 export default function HomeScreen() {
   const [currentWord, setCurrentWord] = useState<VocabWord | null>(null);
@@ -24,12 +21,12 @@ export default function HomeScreen() {
   const router = useRouter();
 
   useEffect(() => {
-    loadInitialData();
-    
+    loadData();
+
     const subscription = AppState.addEventListener('change', nextAppState => {
       if (nextAppState === 'active') {
-        // App has come to the foreground, fetch the latest word from store
-        reloadCurrentWord();
+        // Back in the foreground: the widget may have shuffled, or a new day may have started
+        loadData();
       }
     });
 
@@ -38,37 +35,13 @@ export default function HomeScreen() {
     };
   }, []);
 
-  const reloadCurrentWord = async () => {
-    const word = await getCurrentWord();
-    if (word) {
-      setCurrentWord(word);
-    }
-  };
-
-  const loadInitialData = async () => {
+  const loadData = async () => {
     const word = await checkAndShuffleDaily();
     setCurrentWord(word);
     const list = await getVocabList();
     setVocabCount(list.length);
-    updateWidget();
-  };
-
-  const updateWidget = () => {
-    if (Platform.OS === 'android') {
-      try {
-        requestWidgetUpdate({
-          widgetName: 'VocabWidget',
-          renderWidget: () => <VocabWidget 
-            english={currentWord?.english || ''} 
-            thai={currentWord?.thai || ''} 
-            pos={currentWord?.pos || ''} 
-          />,
-          taskHandler: widgetTaskHandler,
-        });
-      } catch (e) {
-        console.error('Widget update error', e);
-      }
-    }
+    // Pass the word directly; reading `currentWord` state here would be stale
+    updateAllWidgets(word);
   };
 
   const handleShuffle = async () => {
@@ -79,69 +52,57 @@ export default function HomeScreen() {
     const newWord = await shuffleWord();
     if (newWord) {
       setCurrentWord(newWord);
-      // We must update the widget state with the new word
-      if (Platform.OS === 'android') {
-        try {
-          requestWidgetUpdate({
-            widgetName: 'VocabWidget',
-            renderWidget: () => <VocabWidget 
-              english={newWord.english} 
-              thai={newWord.thai} 
-              pos={newWord.pos} 
-            />,
-            taskHandler: widgetTaskHandler,
-          });
-        } catch (e) {}
-      }
+      updateAllWidgets(newWord);
     }
   };
 
   const handleUploadCSV = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['text/csv', 'text/comma-separated-values', 'application/csv'],
+        type: [
+          'text/csv',
+          'text/comma-separated-values',
+          'application/csv',
+          'application/vnd.ms-excel',
+          'text/plain',
+        ],
         copyToCacheDirectory: true,
       });
 
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        const fileUri = result.assets[0].uri;
-        
-        // Read file content
-        let fileContent = '';
-        if (Platform.OS === 'web') {
-           const response = await fetch(fileUri);
-           fileContent = await response.text();
-        } else {
-           fileContent = await FileSystem.readAsStringAsync(fileUri);
-        }
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
 
-        // Parse CSV
-        Papa.parse(fileContent, {
-          header: true,
-          skipEmptyLines: true,
-          complete: async (results) => {
-            const data = results.data as any[];
-            const formattedList: VocabWord[] = data
-              .filter(item => item.english && item.thai)
-              .map(item => ({
-                english: item.english.trim(),
-                thai: item.thai.trim(),
-                pos: item.pos ? item.pos.trim() : '',
-              }));
+      const fileUri = result.assets[0].uri;
 
-            if (formattedList.length > 0) {
-              await saveVocabList(formattedList);
-              setVocabCount(formattedList.length);
-              Alert.alert('Success', `Loaded ${formattedList.length} words.`);
-              loadInitialData(); // Load and show the first word
-            } else {
-              Alert.alert('Error', 'No valid words found in the CSV. Make sure it has "english" and "thai" columns.');
-            }
-          },
-          error: (error: any) => {
-            Alert.alert('Error parsing CSV', error.message);
-          }
-        });
+      let fileContent = '';
+      if (Platform.OS === 'web') {
+        const response = await fetch(fileUri);
+        fileContent = await response.text();
+      } else {
+        fileContent = await FileSystem.readAsStringAsync(fileUri);
+      }
+
+      // Parse synchronously (string input), so errors land in the try/catch above
+      const results = Papa.parse<Record<string, string | undefined>>(fileContent, {
+        header: true,
+        skipEmptyLines: true,
+        // Accept "English", " thai ", and headers with a UTF-8 BOM (Excel exports)
+        transformHeader: header => header.replace(/^\uFEFF/, '').trim().toLowerCase(),
+      });
+
+      const formattedList: VocabWord[] = results.data
+        .map(item => ({
+          english: (item.english ?? '').trim(),
+          thai: (item.thai ?? '').trim(),
+          pos: (item.pos ?? '').trim(),
+        }))
+        .filter(item => item.english && item.thai);
+
+      if (formattedList.length > 0) {
+        await saveVocabList(formattedList);
+        Alert.alert('Success', `Loaded ${formattedList.length} words.`);
+        await loadData();
+      } else {
+        Alert.alert('Error', 'No valid words found in the CSV. Make sure it has "english" and "thai" columns.');
       }
     } catch (error) {
       console.error(error);
